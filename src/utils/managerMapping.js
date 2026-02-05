@@ -3,62 +3,69 @@ const path = require('path');
 
 class ManagerMapping {
     constructor() {
-        this.managerMap = new Map(); // Map<string, string> - name -> discord ID
+        this.managerMap = new Map(); // Map<string, string[]> - name -> array of discord IDs
         this.isLoaded = false;
     }
 
     /**
-     * Load manager data from CSV file
-     * CSV format: STT,Họ và tên,Chức vụ,ID
+     * Load manager data from JSON file
+     * JSON format: { "managers": [{ "fullName": "...", "discordId": "..." }] }
      */
     loadManagerData() {
         try {
-            const csvPath = path.join(__dirname, '../../id.csv');
+            const jsonPath = path.join(__dirname, '../../managers.json');
 
-            if (!fs.existsSync(csvPath)) {
-                console.error('❌ File id.csv không tồn tại tại:', csvPath);
+            if (!fs.existsSync(jsonPath)) {
+                console.error('❌ File managers.json không tồn tại tại:', jsonPath);
                 return false;
             }
 
-            // Read CSV file
-            const csvContent = fs.readFileSync(csvPath, 'utf-8');
-            const lines = csvContent.split('\n');
+            // Read JSON file
+            const jsonContent = fs.readFileSync(jsonPath, 'utf-8');
+            const data = JSON.parse(jsonContent);
 
-            // Skip header (first line)
-            for (let i = 1; i < lines.length; i++) {
-                const line = lines[i].trim();
-                if (!line) continue; // Skip empty lines
+            // Validate data structure
+            if (!data.managers || !Array.isArray(data.managers)) {
+                console.error('❌ Invalid JSON structure. Expected { "managers": [...] }');
+                return false;
+            }
 
-                // Parse CSV line: STT,Họ và tên,Chức vụ,ID
-                const columns = line.split(',');
+            // Load managers into map
+            for (const manager of data.managers) {
+                const { fullName, discordId, discordIds } = manager;
 
-                if (columns.length >= 4) {
-                    const managerName = columns[1].trim(); // Column: Họ và tên
-                    const discordId = columns[3].trim();   // Column: ID
+                // Support both old format (discordId) and new format (discordIds array)
+                let ids = [];
+                if (discordIds && Array.isArray(discordIds)) {
+                    ids = discordIds.filter(id => /^\d+$/.test(id)).map(id => id.trim());
+                } else if (discordId && /^\d+$/.test(discordId)) {
+                    ids = [discordId.trim()];
+                }
 
-                    // Validate discord ID (should be numeric)
-                    if (managerName && discordId && /^\d+$/.test(discordId)) {
-                        this.managerMap.set(managerName, discordId);
-                    }
+                // Validate required fields
+                if (fullName && ids.length > 0) {
+                    this.managerMap.set(fullName.trim(), ids);
+                } else {
+                    console.warn(`⚠️ Skipping invalid manager entry:`, manager);
                 }
             }
 
             this.isLoaded = true;
-            console.log(`✅ Loaded ${this.managerMap.size} managers from id.csv`);
+            console.log(`✅ Loaded ${this.managerMap.size} managers from managers.json`);
             return true;
 
         } catch (error) {
-            console.error('❌ Error loading manager data from CSV:', error);
+            console.error('❌ Error loading manager data from JSON:', error);
             return false;
         }
     }
 
     /**
-     * Get Discord ID by manager name (exact match, case-sensitive)
+     * Get Discord IDs by manager name (exact match, case-sensitive)
      * @param {string} managerName - Manager's full name
-     * @returns {string|null} Discord ID or null if not found
+     * @returns {string[]|null} Array of Discord IDs or null if not found
      */
-    getManagerIdByName(managerName) {
+    getManagerIdsByName(managerName) {
         if (!this.isLoaded) {
             console.error('⚠️ Manager data not loaded. Call loadManagerData() first.');
             return null;
@@ -66,6 +73,17 @@ class ManagerMapping {
 
         const trimmedName = managerName.trim();
         return this.managerMap.get(trimmedName) || null;
+    }
+
+    /**
+     * Get Discord ID by manager name (backward compatibility - returns first ID)
+     * @param {string} managerName - Manager's full name
+     * @returns {string|null} Discord ID or null if not found
+     * @deprecated Use getManagerIdsByName() instead
+     */
+    getManagerIdByName(managerName) {
+        const ids = this.getManagerIdsByName(managerName);
+        return ids && ids.length > 0 ? ids[0] : null;
     }
 
     /**

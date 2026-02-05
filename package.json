@@ -5,17 +5,30 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "nodemon src/index.js"
+    "dev": "nodemon src/index.js",
+    "test:notification": "node test-daily-notification.js",
+    "pm2:start": "pm2 start ecosystem.config.js",
+    "pm2:stop": "pm2 stop bot-nghi-phep",
+    "pm2:restart": "pm2 restart bot-nghi-phep",
+    "pm2:logs": "pm2 logs bot-nghi-phep --lines 100",
+    "pm2:status": "pm2 status"
   },
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
     "discord.js": "^14.14.1",
+    "dotenv": "^16.3.1",
     "googleapis": "^128.0.0",
-    "dotenv": "^16.3.1"
+    "node-cron": "^4.2.1"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"
   },
-  "keywords": ["discord", "bot", "leave-request", "hr"],
+  "keywords": [
+    "discord",
+    "bot",
+    "leave-request",
+    "hr"
+  ],
   "author": "Your Name",
   "license": "MIT"
 }

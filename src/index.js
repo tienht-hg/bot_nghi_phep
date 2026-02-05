@@ -2,6 +2,7 @@ const { Client, Collection, GatewayIntentBits, MessageFlags } = require('discord
 const fs = require('node:fs');
 const path = require('node:path');
 const config = require('./config/config');
+const DailyNotificationService = require('./services/dailyNotification');
 
 // Create Discord client
 const client = new Client({
@@ -47,9 +48,12 @@ for (const file of eventFiles) {
   console.log(`✅ Loaded event: ${event.name}`);
 }
 
-// Load manager data from CSV
+// Initialize daily notification service and store it on client for access
+client.dailyNotificationService = new DailyNotificationService(client);
+
+// Load manager data from JSON
 const managerMapping = require('./utils/managerMapping');
-console.log('📋 Loading manager data from CSV...');
+console.log('📋 Loading manager data from JSON...');
 const loaded = managerMapping.loadManagerData();
 if (!loaded) {
   console.error('⚠️ Warning: Failed to load manager data. Manager routing may not work correctly.');
@@ -96,12 +100,18 @@ process.on('uncaughtException', error => {
 // Graceful shutdown
 process.on('SIGINT', () => {
   console.log('🛑 Received SIGINT. Graceful shutdown...');
+  if (client.dailyNotificationService) {
+    client.dailyNotificationService.stop();
+  }
   client.destroy();
   process.exit(0);
 });
 
 process.on('SIGTERM', () => {
   console.log('🛑 Received SIGTERM. Graceful shutdown...');
+  if (client.dailyNotificationService) {
+    client.dailyNotificationService.stop();
+  }
   client.destroy();
   process.exit(0);
 });

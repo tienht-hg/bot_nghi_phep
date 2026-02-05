@@ -1,13 +1,14 @@
 # Discord Bot Xin Nghỉ Phép
 
-Bot Discord chuyên nghiệp để quản lý yêu cầu nghỉ phép nội bộ công ty, tích hợp với Google Sheets.
+Bot Discord chuyên nghiệp để quản lý yêu cầu nghỉ phép nội bộ công ty, tích hợp với Google Calendar.
 
 ## 🎯 Tính năng chính
 
 - **Form xin nghỉ phép**: Nhân viên gửi yêu cầu qua DM với bot
 - **Duyệt tự động**: Trưởng phòng nhận thông báo và duyệt/từ chối đơn
-- **Thông báo HR**: Tự động gửi thông tin đơn đã duyệt đến channel HR
-- **Lưu trữ dữ liệu**: Tự động cập nhật Google Sheets
+- **Lưu trữ dữ liệu**: Tự động tạo sự kiện trong Google Calendar
+- **Quản lý tập trung**: HR xem tất cả đơn nghỉ phép trực tiếp trên Google Calendar
+- **Thông báo hàng ngày**: Bot tự động gửi thông báo vào channel về danh sách người nghỉ phép mỗi ngày lúc 7:00 sáng
 - **Bảo mật**: Xác thực quyền hạn và validation dữ liệu
 
 ## 🚀 Cài đặt
@@ -41,24 +42,46 @@ Chỉnh sửa file `.env`:
 # Discord Bot Configuration
 DISCORD_TOKEN=your_discord_bot_token_here
 CLIENT_ID=your_bot_client_id_here
-HR_CHANNEL_ID=your_hr_channel_id_here
+NOTIFICATION_CHANNEL_ID=your_channel_id_here
 
-# Google Sheets Configuration  
-GOOGLE_SHEETS_ID=186feLNr-gAvBXLhzDonjm85fWrOt59nHJd142onzBJ4
-GOOGLE_SHEET_NAME=Sheet1
+# Google Calendar Configuration  
+GOOGLE_CALENDAR_ID=primary
 GOOGLE_SERVICE_ACCOUNT_EMAIL=your_service_account_email@project.iam.gserviceaccount.com
 GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nyour_private_key_here\n-----END PRIVATE KEY-----"
 ```
 
+**Lưu ý**: 
+- Tất cả đơn nghỉ phép được lưu trực tiếp vào Google Calendar
+- HR không nhận thông báo qua Discord channel nữa, thay vào đó xem trực tiếp trên Calendar
+- Bot sẽ tự động gửi thông báo danh sách người nghỉ phép hàng ngày vào channel được chỉ định (NOTIFICATION_CHANNEL_ID)
+
 ### 5. Cấu hình danh sách quản lý
 
-Chỉnh sửa file `id.csv` để thêm danh sách quản lý và Discord User ID của họ:
+Chỉnh sửa file `managers.json` để thêm danh sách quản lý và Discord User ID của họ:
 
-```csv
-STT,Họ và tên,Chức vụ,ID
-1,Nguyễn Văn A,Department Manager,123456789012345678
-2,Trần Thị B,Leader Marketing,234567890123456789
-3,Lê Văn C,Leader Designer,345678901234567890
+```json
+{
+  "managers": [
+    {
+      "id": 1,
+      "fullName": "Nguyễn Văn A",
+      "position": "Department Manager",
+      "discordId": "123456789012345678"
+    },
+    {
+      "id": 2,
+      "fullName": "Trần Thị B",
+      "position": "Leader Marketing",
+      "discordId": "234567890123456789"
+    },
+    {
+      "id": 3,
+      "fullName": "Lê Văn C",
+      "position": "Leader Designer",
+      "discordId": "345678901234567890"
+    }
+  ]
+}
 ```
 
 **Cách lấy Discord User ID:**
@@ -66,7 +89,7 @@ STT,Họ và tên,Chức vụ,ID
 2. Click chuột phải vào tên người dùng > **Copy User ID**
 
 **⚠️ Lưu ý quan trọng:**
-- Tên trong file CSV phải khớp **CHÍNH XÁC** (bao gồm hoa/thường, dấu) với tên mà nhân viên nhập vào form
+- Tên trong file JSON (trường `fullName`) phải khớp **CHÍNH XÁC** (bao gồm hoa/thường, dấu) với tên mà nhân viên nhập vào form
 - Khi nhân viên điền form, họ sẽ nhập tên quản lý trực tiếp, bot sẽ tự động tìm Discord ID tương ứng từ file này
 
 ### 6. Deploy commands
@@ -98,8 +121,10 @@ npm run dev
 3. Hệ thống tự động xử lý và thông báo
 
 ### Cho HR:
-1. Nhận thông báo trong channel HR khi đơn được duyệt
-2. Dữ liệu tự động cập nhật vào Google Sheets
+1. Xem tất cả đơn nghỉ phép trực tiếp trên Google Calendar
+2. Mỗi đơn được duyệt tự động tạo event với đầy đủ thông tin
+3. Dễ dàng theo dõi lịch nghỉ của toàn bộ nhân viên
+4. Nhận thông báo tự động mỗi ngày lúc 7:00 sáng về danh sách người nghỉ phép trong ngày
 
 ## 🔧 Cấu hình
 
@@ -121,27 +146,47 @@ departments: [
 
 ### Quản lý và người duyệt đơn
 
-Danh sách quản lý được quản lý trong file `id.csv`:
+Danh sách quản lý được quản lý trong file `managers.json`:
 
-```csv
-STT,Họ và tên,Chức vụ,ID
-1,Phạm Tuấn Anh,Department Manager,1353938845812654150
-2,Bùi Phương Linh,Department Manager,1399621564240232508
-3,Võ Hoài Nam,Leader Marketing,1355009413878120540
+```json
+{
+  "managers": [
+    {
+      "id": 1,
+      "fullName": "Phạm Tuấn Anh",
+      "position": "Department Manager",
+      "discordId": "1353938845812654150"
+    },
+    {
+      "id": 2,
+      "fullName": "Bùi Phương Linh",
+      "position": "Department Manager",
+      "discordId": "1399621564240232508"
+    },
+    {
+      "id": 3,
+      "fullName": "Võ Hoài Nam",
+      "position": "Leader Marketing",
+      "discordId": "1355009413878120540"
+    }
+  ]
+}
 ```
 
 **Cách hoạt động:**
 1. Nhân viên nhập tên "Quản lý trực tiếp" vào form (ví dụ: "Phạm Tuấn Anh")
-2. Bot tự động tìm Discord ID tương ứng trong file `id.csv`
+2. Bot tự động tìm Discord ID tương ứng trong file `managers.json`
 3. Bot gửi thông báo duyệt đơn đến Discord ID đó
 
-**⚠️ Quan trọng:** Tên phải khớp **CHÍNH XÁC** (hoa/thường, dấu) giữa form và file CSV
+**⚠️ Quan trọng:** Tên phải khớp **CHÍNH XÁC** (hoa/thường, dấu) giữa form và file JSON
 
-### Google Sheets
-- Cột B-I: Dữ liệu form
-- Cột J: Trạng thái ("Đã duyệt"/"Từ chối")
-- Dòng 1: Header
-- Dữ liệu bắt đầu từ dòng 2
+### Google Calendar
+- Mỗi đơn nghỉ phép tạo một event trong calendar
+- Event title: 🏖️ Nghỉ phép: [Tên nhân viên]
+- Event time: Theo ngày và thời gian nghỉ
+- Event description: Đầy đủ thông tin đơn nghỉ phép
+- Event color: Xanh (duyệt) / Đỏ (từ chối)
+- Xem chi tiết cấu hình trong `CALENDAR_SETUP.md`
 
 ## 🛡️ Bảo mật
 
@@ -165,26 +210,29 @@ Bot ghi log các hoạt động quan trọng:
 - Đảm bảo bot có quyền gửi DM
 - Kiểm tra intents trong Developer Portal
 
-### Lỗi Google Sheets
+### Lỗi Google Calendar
 - Xác minh Service Account credentials
-- Kiểm tra quyền truy cập spreadsheet
-- Đảm bảo API được bật
+- Kiểm tra quyền truy cập calendar
+- Đảm bảo Google Calendar API được bật
+- Xem chi tiết trong `CALENDAR_SETUP.md`
 
 ### Lỗi permissions
-- Bot cần quyền "Send Messages" trong channel HR
-- Service Account cần quyền "Editor" cho Google Sheets
+- Service Account cần quyền truy cập Google Calendar API
+- Đảm bảo calendar đã được share với service account (nếu dùng calendar riêng)
 
 ## 📝 API Reference
 
 ### Commands
 - `/form` - Mở form xin nghỉ phép (chỉ DM)
+- `/checkleaves` - Kiểm tra và gửi thông báo người nghỉ phép hôm nay (chỉ Admin)
 
 ### Events
 - `ready` - Bot khởi động
 - `interactionCreate` - Xử lý slash commands, modals, buttons
 
 ### Services
-- `GoogleSheetsService` - Quản lý tương tác Google Sheets
+- `GoogleCalendarService` - Quản lý tương tác Google Calendar
+- `DailyNotificationService` - Quản lý thông báo hàng ngày về danh sách người nghỉ phép
 - `EmbedUtils` - Tạo Discord embeds
 - `Validators` - Validation dữ liệu
 
@@ -199,6 +247,20 @@ Bot ghi log các hoạt động quan trọng:
 ## 📄 License
 
 MIT License - xem file LICENSE để biết chi tiết.
+
+## 🔔 Tính năng thông báo hàng ngày
+
+Bot tự động gửi thông báo vào channel chỉ định mỗi ngày lúc 7:00 sáng (giờ Việt Nam) nếu có người nghỉ phép trong ngày đó.
+
+### Cấu hình:
+1. Thêm `NOTIFICATION_CHANNEL_ID` vào file `.env`
+2. Bot sẽ tự động kiểm tra và gửi thông báo
+3. Nếu không có ai nghỉ, bot sẽ không gửi thông báo
+
+### Test thủ công:
+Sử dụng lệnh `/checkleaves` để test ngay lập tức (chỉ Admin)
+
+**Xem chi tiết trong file `DAILY_NOTIFICATION.md`**
 
 ## 📞 Hỗ trợ
 

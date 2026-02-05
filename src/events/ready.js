@@ -1,40 +1,45 @@
-const GoogleSheetsService = require('../services/googleSheets');
+const GoogleCalendarService = require('../services/googleCalendar');
+const pendingRequestsStore = require('../utils/pendingRequestsStore');
 
 module.exports = {
-  name: 'ready',
+  name: 'clientReady',
   once: true,
-  
+
   async execute(client) {
     console.log('🤖 Bot đã sẵn sàng!');
     console.log(`📊 Đăng nhập với tài khoản: ${client.user.tag}`);
     console.log(`🏢 Đang hoạt động trên ${client.guilds.cache.size} server(s)`);
-    
-    // Test Google Sheets connection
-    console.log('🔗 Đang kiểm tra kết nối Google Sheets...');
+
+    // Test Google Calendar connection
+    console.log('🔗 Đang kiểm tra kết nối Google Calendar...');
     try {
-      const isConnected = await GoogleSheetsService.testConnection();
+      const isConnected = await GoogleCalendarService.testConnection();
       if (isConnected) {
-        console.log('✅ Kết nối Google Sheets thành công');
+        console.log('✅ Kết nối Google Calendar thành công');
       } else {
-        console.log('❌ Không thể kết nối Google Sheets');
+        console.log('❌ Không thể kết nối Google Calendar');
       }
     } catch (error) {
-      console.error('❌ Lỗi kết nối Google Sheets:', error.message);
+      console.error('❌ Lỗi kết nối Google Calendar:', error.message);
     }
 
     // Initialize temporary data storage
     if (!client.tempFormData) {
       client.tempFormData = new Map();
     }
-    
-    if (!client.pendingRequests) {
-      client.pendingRequests = new Map();
-    }
+
+    // Load pending requests from file (persistent storage)
+    client.pendingRequests = pendingRequestsStore.load();
 
     // Clean up expired data every hour
     setInterval(() => {
       cleanupExpiredData(client);
     }, 60 * 60 * 1000); // 1 hour
+
+    // Start daily notification service
+    if (client.dailyNotificationService) {
+      client.dailyNotificationService.start();
+    }
 
     console.log('🚀 Bot hoàn toàn sẵn sàng để xử lý yêu cầu nghỉ phép!');
   }
@@ -56,12 +61,18 @@ function cleanupExpiredData(client) {
 
   // Clean up expired pending requests (older than 24 hours)
   const requestExpireTime = 24 * 60 * 60 * 1000; // 24 hours
+  let cleanedRequests = 0;
   if (client.pendingRequests) {
     for (const [requestKey, request] of client.pendingRequests.entries()) {
       if (request.timestamp && (now - request.timestamp) > requestExpireTime) {
         client.pendingRequests.delete(requestKey);
+        cleanedRequests++;
         console.log(`🧹 Cleaned up expired pending request ${requestKey}`);
       }
+    }
+    // Save to file if any requests were cleaned up
+    if (cleanedRequests > 0) {
+      pendingRequestsStore.save(client.pendingRequests);
     }
   }
 

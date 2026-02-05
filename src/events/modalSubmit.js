@@ -8,6 +8,7 @@ const {
 const config = require('../config/config');
 const Validators = require('../utils/validators');
 const EmbedUtils = require('../utils/embeds');
+const pendingRequestsStore = require('../utils/pendingRequestsStore');
 
 module.exports = {
   name: 'interactionCreate',
@@ -35,21 +36,21 @@ module.exports = {
 };
 
 async function handleLeaveRequestForm(interaction) {
-  // Get form data from first modal
-  const formData = {
-    email: Validators.sanitizeInput(interaction.fields.getTextInputValue('email')),
-    employeeId: Validators.sanitizeInput(interaction.fields.getTextInputValue('employee_id')),
-    fullName: Validators.sanitizeInput(interaction.fields.getTextInputValue('full_name')),
-    department: Validators.sanitizeInput(interaction.fields.getTextInputValue('department')),
-    leaveDate: Validators.sanitizeInput(interaction.fields.getTextInputValue('leave_date'))
-  };
+  // Get ALL form data first (before any validation)
+  const fullName = Validators.sanitizeInput(interaction.fields.getTextInputValue('full_name'));
+  const rawLeaveDateTime = Validators.sanitizeInput(interaction.fields.getTextInputValue('leave_date'));
+  const reason = Validators.sanitizeInput(interaction.fields.getTextInputValue('reason'));
 
-  // Validate department - DISABLED: Allow any department name
-  // NOTE: Department validation is currently disabled to allow flexible department names
-  // Uncomment the code below to enable strict department validation
-  /*
-  if (!config.departments.includes(formData.department)) {
-    storeDraftFormData(interaction, formData);
+  // Parse combined date and time (supports date ranges)
+  const parsedDateTime = Validators.parseLeaveDateTimeRange(rawLeaveDateTime);
+
+  if (!parsedDateTime.isValid) {
+    // Store draft data even when date parsing fails
+    storeDraftFormData(interaction, {
+      fullName,
+      rawLeaveDateTime,
+      reason
+    });
 
     const retryButton = new ButtonBuilder()
       .setCustomId(`retry_form_${interaction.user.id}`)
@@ -59,12 +60,26 @@ async function handleLeaveRequestForm(interaction) {
     const actionRow = new ActionRowBuilder().addComponents(retryButton);
 
     return await interaction.reply({
-      content: `❌ Phòng ban không hợp lệ. Vui lòng chọn một trong các phòng ban sau:\n${config.departments.map(dept => `• ${dept}`).join('\n')}`,
+      content: `❌ ${parsedDateTime.error}\n\n💡 **Ví dụ hợp lệ:**\n• Nghỉ một ngày: \`25/01/2026\`\n• Nghỉ buổi sáng: \`Buổi sáng, 25/01/2026\`\n• Nghỉ nhiều ngày: \`20/01/2026 - 22/01/2026\`\n• Nghỉ từ sáng đến chiều: \`Buổi sáng, 20/01/2026 - Buổi chiều, 22/01/2026\``,
       components: [actionRow],
       flags: MessageFlags.Ephemeral
     });
   }
-  */
+
+  // Build form data with date range support
+  const formData = {
+    fullName,
+    // For backward compatibility, use first date as leaveDate
+    leaveDate: parsedDateTime.dates[0].date,
+    leaveTime: parsedDateTime.dates[0].time,
+    reason,
+    rawLeaveDateTime,
+    // New fields for date range support
+    isRange: parsedDateTime.isRange,
+    leaveDateDisplay: parsedDateTime.displayText,
+    dates: parsedDateTime.dates,  // Array of { date, time } for each day
+    totalDays: parsedDateTime.totalDays
+  };
 
   // Validate basic form data
   const basicValidation = validateBasicFormData(formData);
@@ -85,105 +100,45 @@ async function handleLeaveRequestForm(interaction) {
     });
   }
 
-  // Store form data temporarily
-  if (!interaction.client.tempFormData) {
-    interaction.client.tempFormData = new Map();
-  }
-  interaction.client.tempFormData.set(interaction.user.id, {
-    ...formData,
-    timestamp: Date.now()
-  });
-
   if (interaction.client.draftFormData) {
     interaction.client.draftFormData.delete(interaction.user.id);
   }
 
-  // Create embed showing current data and button to continue
-  const embed = new EmbedBuilder()
-    .setColor('#0099ff')
-    .setTitle('📝 Thông tin đã nhập - Bước 1/2')
-    .setDescription('Vui lòng kiểm tra thông tin và nhấn "Tiếp tục" để điền phần còn lại.')
-    .addFields(
-      { name: '📧 Email', value: formData.email, inline: true },
-      { name: '🆔 Mã nhân viên', value: formData.employeeId, inline: true },
-      { name: '👤 Họ và tên', value: formData.fullName, inline: true },
-      { name: '🏢 Phòng ban/Công ty', value: formData.department, inline: true },
-      { name: '📅 Ngày nghỉ', value: formData.leaveDate, inline: true },
-      { name: '\u200B', value: '\u200B', inline: true }
-    )
-    .setFooter({ text: 'Bước tiếp theo: Thời gian nghỉ, lý do và quản lý trực tiếp' });
+  // Get manager automatically from managers.json (first manager for now)
+  const managerMapping = require('../utils/managerMapping');
+  const allManagers = managerMapping.getAllManagerNames();
 
-  const continueButton = new ButtonBuilder()
-    .setCustomId(`continue_form_${interaction.user.id}`)
-    .setLabel('➡️ Tiếp tục')
-    .setStyle(ButtonStyle.Primary);
-
-  const cancelButton = new ButtonBuilder()
-    .setCustomId(`cancel_form_${interaction.user.id}`)
-    .setLabel('❌ Hủy')
-    .setStyle(ButtonStyle.Secondary);
-
-  const actionRow = new ActionRowBuilder().addComponents(continueButton, cancelButton);
-
-  await interaction.reply({
-    embeds: [embed],
-    components: [actionRow],
-    flags: MessageFlags.Ephemeral
-  });
-}
-
-async function handleLeaveRequestFormPart2(interaction) {
-  // Get stored form data from first modal
-  const storedData = interaction.client.tempFormData?.get(interaction.user.id);
-  if (!storedData) {
+  if (allManagers.length === 0) {
     return await interaction.reply({
-      content: '❌ Dữ liệu form đã hết hạn. Vui lòng sử dụng lệnh `/form` để bắt đầu lại.',
+      content: '❌ Không tìm thấy quản lý trong hệ thống. Vui lòng liên hệ HR.',
       flags: MessageFlags.Ephemeral
     });
   }
 
-  // Get data from second modal
-  const leaveTime = Validators.sanitizeInput(interaction.fields.getTextInputValue('leave_time'));
-  const reason = Validators.sanitizeInput(interaction.fields.getTextInputValue('reason'));
-  const directManager = Validators.sanitizeInput(interaction.fields.getTextInputValue('direct_manager'));
+  // Use first manager (you can add more complex logic later)
+  const directManager = allManagers[0];
+  const managerIds = managerMapping.getManagerIdsByName(directManager);
 
-  // Validate leave time
-  if (!config.timeOptions.includes(leaveTime)) {
-    storeDraftFormDataPart2(interaction, { leaveTime, reason, directManager });
-
-    const retryButton = new ButtonBuilder()
-      .setCustomId(`retry_form_part2_${interaction.user.id}`)
-      .setLabel('🔄 Điền lại')
-      .setStyle(ButtonStyle.Primary);
-
-    const actionRow = new ActionRowBuilder().addComponents(retryButton);
-
+  if (!managerIds || managerIds.length === 0) {
     return await interaction.reply({
-      content: `❌ Thời gian nghỉ không hợp lệ. Vui lòng chọn một trong các tùy chọn sau:\n${config.timeOptions.map(time => `• ${time}`).join('\n')}`,
-      components: [actionRow],
+      content: '❌ Không thể xác định quản lý. Vui lòng liên hệ HR.',
       flags: MessageFlags.Ephemeral
     });
   }
 
-  // Combine all form data
+  // Add manager info to formData
   const completeFormData = {
-    email: storedData.email,
-    employeeId: storedData.employeeId,
-    fullName: storedData.fullName,
-    department: storedData.department,
-    leaveDate: storedData.leaveDate,
-    leaveTime,
-    reason,
-    directManager
+    ...formData,
+    directManager: directManager
   };
 
   // Validate complete form data
   const validation = Validators.validateLeaveRequestData(completeFormData);
   if (!validation.isValid) {
-    storeDraftFormDataPart2(interaction, { leaveTime, reason, directManager });
+    storeDraftFormData(interaction, completeFormData);
 
     const retryButton = new ButtonBuilder()
-      .setCustomId(`retry_form_part2_${interaction.user.id}`)
+      .setCustomId(`retry_form_${interaction.user.id}`)
       .setLabel('🔄 Điền lại')
       .setStyle(ButtonStyle.Primary);
 
@@ -196,51 +151,11 @@ async function handleLeaveRequestFormPart2(interaction) {
     });
   }
 
-  // Clean up draft data from part 2 validation
-  if (interaction.client.draftFormDataPart2) {
-    interaction.client.draftFormDataPart2.delete(interaction.user.id);
-  }
-
   // Send confirmation to employee
   const confirmationEmbed = EmbedUtils.createFormSubmissionEmbed(completeFormData);
   await interaction.reply({ embeds: [confirmationEmbed], flags: MessageFlags.Ephemeral });
 
-  // Find manager by name using CSV mapping
-  const managerMapping = require('../utils/managerMapping');
-  const managerId = managerMapping.getManagerIdByName(completeFormData.directManager);
-
-  if (!managerId) {
-    const allManagers = managerMapping.getAllManagerNames();
-    const exampleNames = allManagers.slice(0, 3).map(name => `"${name}"`).join(', ');
-
-    // Store draft to allow retry
-    storeDraftFormDataPart2(interaction, { leaveTime, reason, directManager });
-
-    const retryButton = new ButtonBuilder()
-      .setCustomId(`retry_form_part2_${interaction.user.id}`)
-      .setLabel('🔄 Điền lại')
-      .setStyle(ButtonStyle.Primary);
-
-    const actionRow = new ActionRowBuilder().addComponents(retryButton);
-
-    return await interaction.followUp({
-      content: `❌ Không tìm thấy quản lý **"${completeFormData.directManager}"** trong hệ thống.\n\n` +
-        `💡 **Lưu ý**: Tên phải khớp **CHÍNH XÁC** (bao gồm hoa/thường, dấu) với tên trong danh sách.\n` +
-        `📋 Hệ thống có **${allManagers.length} quản lý**.\n` +
-        `✅ Ví dụ tên đúng: ${exampleNames}\n\n` +
-        `Vui lòng kiểm tra lại tên hoặc liên hệ HR.`,
-      components: [actionRow],
-      flags: MessageFlags.Ephemeral
-    });
-  }
-
-  // Clean up temporary data only after successful validation
-  interaction.client.tempFormData.delete(interaction.user.id);
-
   try {
-    // Get manager user
-    const manager = await interaction.client.users.fetch(managerId);
-
     // Create approval embed and buttons
     const approvalEmbed = EmbedUtils.createManagerApprovalEmbed(completeFormData, interaction.user);
 
@@ -258,34 +173,71 @@ async function handleLeaveRequestFormPart2(interaction) {
 
     const actionRow = new ActionRowBuilder().addComponents(approveButton, rejectButton);
 
-    // Send DM to manager
-    await manager.send({
-      embeds: [approvalEmbed],
-      components: [actionRow]
-    });
-
     // Store request data for later use in button interactions
     if (!interaction.client.pendingRequests) {
       interaction.client.pendingRequests = new Map();
     }
 
-    interaction.client.pendingRequests.set(requestKey, {
+    // Send DM to all managers and store message info
+    const managerMessages = [];
+    let sentCount = 0;
+    let errorMessages = [];
+
+    for (const managerId of managerIds) {
+      try {
+        const manager = await interaction.client.users.fetch(managerId);
+
+        // Send DM to manager
+        const sentMessage = await manager.send({
+          embeds: [approvalEmbed],
+          components: [actionRow]
+        });
+
+        managerMessages.push({
+          managerId: managerId,
+          messageId: sentMessage.id,
+          channelId: sentMessage.channel.id
+        });
+
+        sentCount++;
+        console.log(`✅ Leave request sent to manager ${manager.tag}`);
+      } catch (error) {
+        console.error(`❌ Error sending to manager ${managerId}:`, error);
+        errorMessages.push(`Không thể gửi đến manager ID: ${managerId}`);
+      }
+    }
+
+    if (sentCount === 0) {
+      throw new Error('Không thể gửi yêu cầu đến bất kỳ quản lý nào.');
+    }
+
+    // Store request with all manager message info (persistent storage)
+    const requestData = {
       requestData: completeFormData,
       employeeId: interaction.user.id,
-      managerId: managerId,
+      managerIds: managerIds,
+      managerMessages: managerMessages,
       timestamp: Date.now()
-    });
+    };
+    pendingRequestsStore.add(requestKey, requestData, interaction.client.pendingRequests);
 
-    console.log(`✅ Leave request sent to manager ${manager.tag} for employee ${interaction.user.tag}`);
+    console.log(`✅ Leave request sent to ${sentCount} manager(s) for employee ${interaction.user.tag}`);
+
+    if (errorMessages.length > 0) {
+      await interaction.followUp({
+        content: `⚠️ Một số thông báo không được gửi:\n${errorMessages.join('\n')}`,
+        flags: MessageFlags.Ephemeral
+      });
+    }
 
   } catch (error) {
-    console.error('Error sending request to manager:', error);
+    console.error('Error sending request to managers:', error);
 
     let errorMessage = '❌ Không thể gửi yêu cầu đến trưởng phòng. Vui lòng liên hệ HR.';
 
     // Handle specific Discord API errors
     if (error.code === 10013) {
-      errorMessage = `❌ Không tìm thấy người dùng Discord với ID quản lý "${completeFormData.directManager}". ID không hợp lệ hoặc người dùng đã rời khỏi Discord.`;
+      errorMessage = `❌ Không tìm thấy người dùng Discord với ID quản lý. Vui lòng liên hệ HR.`;
     } else if (error.code === 50013) {
       errorMessage = '❌ Bot không có quyền gửi tin nhắn đến trưởng phòng. Vui lòng liên hệ admin.';
     }
@@ -297,19 +249,18 @@ async function handleLeaveRequestFormPart2(interaction) {
   }
 }
 
+// This function is no longer needed since we combined everything into one modal
+async function handleLeaveRequestFormPart2(interaction) {
+  // This handler is kept for backward compatibility but should not be called
+  return await interaction.reply({
+    content: '❌ Chức năng này đã được cập nhật. Vui lòng sử dụng lệnh `/form` để bắt đầu lại.',
+    flags: MessageFlags.Ephemeral
+  });
+}
+
 // Helper function to validate basic form data
 function validateBasicFormData(formData) {
   const errors = [];
-
-  // Email validation
-  if (!Validators.isValidEmail(formData.email)) {
-    errors.push('Email không hợp lệ');
-  }
-
-  // Employee ID validation
-  if (!Validators.isValidEmployeeId(formData.employeeId)) {
-    errors.push('Mã nhân viên không hợp lệ (3-10 ký tự, chỉ chữ và số)');
-  }
 
   // Full name validation
   if (!Validators.isValidFullName(formData.fullName)) {
@@ -319,6 +270,11 @@ function validateBasicFormData(formData) {
   // Date validation
   if (!Validators.isValidDate(formData.leaveDate)) {
     errors.push('Ngày nghỉ không hợp lệ (định dạng: dd/mm/yyyy)');
+  }
+
+  // Reason validation
+  if (!Validators.isValidReason(formData.reason)) {
+    errors.push('Lý do nghỉ phải có ít nhất 5 ký tự và không quá 500 ký tự');
   }
 
   return {

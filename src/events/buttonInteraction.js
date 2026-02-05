@@ -6,8 +6,9 @@ const {
   MessageFlags
 } = require('discord.js');
 const EmbedUtils = require('../utils/embeds');
-const GoogleSheetsService = require('../services/googleSheets');
+const GoogleCalendarService = require('../services/googleCalendar');
 const config = require('../config/config');
+const pendingRequestsStore = require('../utils/pendingRequestsStore');
 
 module.exports = {
   name: 'interactionCreate',
@@ -57,8 +58,9 @@ async function handleApprovalDecision(interaction) {
     });
   }
 
-  // Check if user is authorized to make this decision
-  if (interaction.user.id !== pendingRequest.managerId) {
+  // Check if user is authorized to make this decision (must be one of the managers)
+  const managerIds = pendingRequest.managerIds || [pendingRequest.managerId];
+  if (!managerIds.includes(interaction.user.id)) {
     return await interaction.reply({
       content: '❌ Bạn không có quyền xử lý yêu cầu này.',
       flags: MessageFlags.Ephemeral
@@ -77,27 +79,17 @@ async function handleApprovalDecision(interaction) {
     const employee = await interaction.client.users.fetch(employeeId);
 
     if (isApproval) {
-      // If approved, add to Google Sheets
+      // If approved, add to Google Calendar
       try {
-        await GoogleSheetsService.addLeaveRequest(requestData, status);
-        console.log('✅ Leave request added to Google Sheets successfully');
-      } catch (sheetsError) {
-        console.error('❌ Error adding to Google Sheets:', sheetsError);
-        // Continue with the process even if Google Sheets fails
+        await GoogleCalendarService.addLeaveRequest(requestData, status);
+        console.log('✅ Leave request added to Google Calendar successfully');
+      } catch (calendarError) {
+        console.error('❌ Error adding to Google Calendar:', calendarError);
+        // Continue with the process even if Google Calendar fails
       }
 
-      // Send notification to HR channel
-      try {
-        const hrChannel = await interaction.client.channels.fetch(config.discord.hrChannelId);
-        if (hrChannel) {
-          const hrEmbed = EmbedUtils.createHRNotificationEmbed(requestData, interaction.user);
-          await hrChannel.send({ embeds: [hrEmbed] });
-          console.log('✅ HR notification sent successfully');
-        }
-      } catch (hrError) {
-        console.error('❌ Error sending HR notification:', hrError);
-        // Continue with the process even if HR notification fails
-      }
+      // HR notification removed - all leave requests are now stored in Google Calendar
+      // HR can view the calendar directly instead of receiving channel notifications
     }
 
     // Send notification to employee
@@ -140,20 +132,67 @@ async function handleApprovalDecision(interaction) {
       components: [disabledApproveButton, disabledRejectButton]
     }];
 
-    // Update the original message to show it's been processed
-    const processedEmbed = {
-      ...originalMessage.embeds[0],
-      color: isApproval ? 0x00ff00 : 0xff0000, // Green for approved, red for rejected
-      title: isApproval ? '✅ Đã duyệt đơn nghỉ phép' : '❌ Đã từ chối đơn nghỉ phép'
-    };
+    // Update the current manager's message to show it's been processed
+    // Fetch the channel and message to avoid ChannelNotCached error
+    try {
+      const dmChannel = await interaction.user.createDM();
+      const fetchedMessage = await dmChannel.messages.fetch(originalMessage.id);
 
-    await originalMessage.edit({
-      embeds: [processedEmbed],
-      components: disabledComponents
-    });
+      const processedEmbed = {
+        ...fetchedMessage.embeds[0]?.data || originalMessage.embeds[0],
+        color: isApproval ? 0x00ff00 : 0xff0000, // Green for approved, red for rejected
+        title: isApproval ? `✅ Đã duyệt đơn nghỉ phép của ${requestData.fullName}` : `❌ Đã từ chối đơn nghỉ phép của ${requestData.fullName}`
+      };
 
-    // Clean up pending request
-    interaction.client.pendingRequests.delete(requestKey);
+      await fetchedMessage.edit({
+        embeds: [processedEmbed],
+        components: disabledComponents
+      });
+    } catch (editError) {
+      console.error('⚠️ Could not edit original message:', editError.message);
+      // Continue even if we can't edit the message
+    }
+
+    // Update messages for other managers to show it's been processed
+    const managerMessages = pendingRequest.managerMessages || [];
+    for (const msgInfo of managerMessages) {
+      // Skip the current manager's message (already edited above)
+      if (msgInfo.managerId === interaction.user.id) {
+        continue;
+      }
+
+      try {
+        const otherManager = await interaction.client.users.fetch(msgInfo.managerId);
+        const dmChannel = await otherManager.createDM();
+        const message = await dmChannel.messages.fetch(msgInfo.messageId);
+
+        // Create notification embed showing who processed the request
+        const notificationEmbed = {
+          ...message.embeds[0],
+          color: isApproval ? 0x00ff00 : 0xff0000, // Green for approved, red for rejected
+          title: isApproval
+            ? `✅ Đơn của ${requestData.fullName} đã được duyệt bởi ${interaction.user.displayName || interaction.user.username}`
+            : `❌ Đơn của ${requestData.fullName} đã bị từ chối bởi ${interaction.user.displayName || interaction.user.username}`,
+          footer: {
+            text: `Xử lý bởi ${interaction.user.tag} lúc ${new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}`
+          }
+        };
+
+        // Update the message with disabled buttons
+        await message.edit({
+          embeds: [notificationEmbed],
+          components: disabledComponents
+        });
+
+        console.log(`✅ Updated approval request message for manager ${otherManager.tag}`);
+      } catch (error) {
+        console.error(`❌ Error updating message for manager ${msgInfo.managerId}:`, error.message);
+        // Continue even if we can't update some messages
+      }
+    }
+
+    // Clean up pending request (remove from file too)
+    pendingRequestsStore.remove(requestKey, interaction.client.pendingRequests);
 
     console.log(`✅ Leave request ${action} by ${interaction.user.tag} for employee ${employee.tag}`);
 
@@ -167,65 +206,11 @@ async function handleApprovalDecision(interaction) {
 }
 
 async function handleContinueForm(interaction) {
-  const userId = interaction.customId.replace('continue_form_', '');
-
-  // Check if user is authorized
-  if (interaction.user.id !== userId) {
-    return await interaction.reply({
-      content: '❌ Bạn không có quyền thực hiện hành động này.',
-      flags: MessageFlags.Ephemeral
-    });
-  }
-
-  // Check if form data exists
-  const storedData = interaction.client.tempFormData?.get(userId);
-  if (!storedData) {
-    return await interaction.reply({
-      content: '❌ Dữ liệu form đã hết hạn. Vui lòng sử dụng lệnh `/form` để bắt đầu lại.',
-      flags: MessageFlags.Ephemeral
-    });
-  }
-
-  // Create second modal for remaining fields
-  const modal2 = new ModalBuilder()
-    .setCustomId('leave_request_form_part2')
-    .setTitle('📝 Form Xin Nghỉ Phép (Bước 2/2)');
-
-  // Leave time input
-  const leaveTimeInput = new TextInputBuilder()
-    .setCustomId('leave_time')
-    .setLabel('Thời gian nghỉ')
-    .setStyle(TextInputStyle.Short)
-    .setPlaceholder(`Chọn: ${config.timeOptions.join(', ')}`)
-    .setRequired(true)
-    .setMaxLength(20);
-
-  // Reason input
-  const reasonInput = new TextInputBuilder()
-    .setCustomId('reason')
-    .setLabel('Lý do nghỉ')
-    .setStyle(TextInputStyle.Paragraph)
-    .setPlaceholder('Mô tả lý do xin nghỉ phép...')
-    .setRequired(true)
-    .setMaxLength(500);
-
-  // Direct manager input
-  const directManagerInput = new TextInputBuilder()
-    .setCustomId('direct_manager')
-    .setLabel('Quản lý trực tiếp')
-    .setStyle(TextInputStyle.Short)
-    .setPlaceholder('vd: Nguyễn Văn B')
-    .setRequired(true)
-    .setMaxLength(100);
-
-  // Create action rows
-  const firstActionRow = new ActionRowBuilder().addComponents(leaveTimeInput);
-  const secondActionRow = new ActionRowBuilder().addComponents(reasonInput);
-  const thirdActionRow = new ActionRowBuilder().addComponents(directManagerInput);
-
-  modal2.addComponents(firstActionRow, secondActionRow, thirdActionRow);
-
-  await interaction.showModal(modal2);
+  // This handler is no longer needed since we combined everything into one modal
+  return await interaction.reply({
+    content: '❌ Chức năng này đã được cập nhật. Vui lòng sử dụng lệnh `/form` để bắt đầu lại.',
+    flags: MessageFlags.Ephemeral
+  });
 }
 
 async function handleCancelForm(interaction) {
@@ -278,30 +263,6 @@ async function handleRetryForm(interaction) {
     .setCustomId('leave_request_form')
     .setTitle('📝 Form Xin Nghỉ Phép');
 
-  const emailInput = new TextInputBuilder()
-    .setCustomId('email')
-    .setLabel('Email công ty')
-    .setStyle(TextInputStyle.Short)
-    .setPlaceholder('vd: nguyen.van.a@company.com')
-    .setRequired(true)
-    .setMaxLength(100);
-
-  if (draftData.email) {
-    emailInput.setValue(draftData.email);
-  }
-
-  const employeeIdInput = new TextInputBuilder()
-    .setCustomId('employee_id')
-    .setLabel('Mã nhân viên')
-    .setStyle(TextInputStyle.Short)
-    .setPlaceholder('vd: NV001')
-    .setRequired(true)
-    .setMaxLength(20);
-
-  if (draftData.employeeId) {
-    employeeIdInput.setValue(draftData.employeeId);
-  }
-
   const fullNameInput = new TextInputBuilder()
     .setCustomId('full_name')
     .setLabel('Họ và tên')
@@ -314,93 +275,19 @@ async function handleRetryForm(interaction) {
     fullNameInput.setValue(draftData.fullName);
   }
 
-  const departmentInput = new TextInputBuilder()
-    .setCustomId('department')
-    .setLabel('Phòng ban/Công ty')
-    .setStyle(TextInputStyle.Short)
-    .setPlaceholder(`Chọn: ${config.departments.join(', ')}`)
-    .setRequired(true)
-    .setMaxLength(50);
-
-  if (draftData.department) {
-    departmentInput.setValue(draftData.department);
-  }
-
   const leaveDateInput = new TextInputBuilder()
     .setCustomId('leave_date')
-    .setLabel('Ngày nghỉ (dd/mm/yyyy)')
+    .setLabel('Ngày nghỉ và thời gian')
     .setStyle(TextInputStyle.Short)
-    .setPlaceholder('vd: 25/12/2024')
+    .setPlaceholder('VD: 15/01/2026 hoặc 15/01/2026 - 17/01/2026')
     .setRequired(true)
-    .setMaxLength(10);
+    .setMaxLength(100);
 
-  if (draftData.leaveDate) {
+  if (draftData.rawLeaveDateTime) {
+    leaveDateInput.setValue(draftData.rawLeaveDateTime);
+  } else if (draftData.leaveDate) {
+    // Fallback for old format
     leaveDateInput.setValue(draftData.leaveDate);
-  }
-
-  const firstActionRow = new ActionRowBuilder().addComponents(emailInput);
-  const secondActionRow = new ActionRowBuilder().addComponents(employeeIdInput);
-  const thirdActionRow = new ActionRowBuilder().addComponents(fullNameInput);
-  const fourthActionRow = new ActionRowBuilder().addComponents(departmentInput);
-  const fifthActionRow = new ActionRowBuilder().addComponents(leaveDateInput);
-
-  modal.addComponents(
-    firstActionRow,
-    secondActionRow,
-    thirdActionRow,
-    fourthActionRow,
-    fifthActionRow
-  );
-
-  await interaction.showModal(modal);
-}
-
-async function handleRetryFormPart2(interaction) {
-  const userId = interaction.customId.replace('retry_form_part2_', '');
-
-  console.log('[DEBUG] handleRetryFormPart2:');
-  console.log('  customId:', interaction.customId);
-  console.log('  extracted userId:', userId);
-  console.log('  interaction.user.id:', interaction.user.id);
-  console.log('  Match:', interaction.user.id === userId);
-
-  if (interaction.user.id !== userId) {
-    return await interaction.reply({
-      content: '❌ Bạn không có quyền thực hiện hành động này.',
-      flags: MessageFlags.Ephemeral
-    });
-  }
-
-  const storedData = interaction.client.tempFormData?.get(userId);
-  if (!storedData) {
-    return await interaction.reply({
-      content: '❌ Dữ liệu form đã hết hạn. Vui lòng sử dụng lệnh `/form` để bắt đầu lại.',
-      flags: MessageFlags.Ephemeral
-    });
-  }
-
-  const draftData = interaction.client.draftFormDataPart2?.get(userId);
-  if (!draftData) {
-    return await interaction.reply({
-      content: '❌ Không tìm thấy dữ liệu trước đó. Vui lòng sử dụng lệnh `/form` để bắt đầu lại.',
-      flags: MessageFlags.Ephemeral
-    });
-  }
-
-  const modal2 = new ModalBuilder()
-    .setCustomId('leave_request_form_part2')
-    .setTitle('📝 Form Xin Nghỉ Phép (Bước 2/2)');
-
-  const leaveTimeInput = new TextInputBuilder()
-    .setCustomId('leave_time')
-    .setLabel('Thời gian nghỉ')
-    .setStyle(TextInputStyle.Short)
-    .setPlaceholder(`Chọn: ${config.timeOptions.join(', ')}`)
-    .setRequired(true)
-    .setMaxLength(20);
-
-  if (draftData.leaveTime) {
-    leaveTimeInput.setValue(draftData.leaveTime);
   }
 
   const reasonInput = new TextInputBuilder()
@@ -415,23 +302,23 @@ async function handleRetryFormPart2(interaction) {
     reasonInput.setValue(draftData.reason);
   }
 
-  const directManagerInput = new TextInputBuilder()
-    .setCustomId('direct_manager')
-    .setLabel('Quản lý trực tiếp (Điền chính xác tên đầy đủ)')
-    .setStyle(TextInputStyle.Short)
-    .setPlaceholder('vd: Nguyễn Văn B')
-    .setRequired(true)
-    .setMaxLength(100);
+  const firstActionRow = new ActionRowBuilder().addComponents(fullNameInput);
+  const secondActionRow = new ActionRowBuilder().addComponents(leaveDateInput);
+  const thirdActionRow = new ActionRowBuilder().addComponents(reasonInput);
 
-  if (draftData.directManager) {
-    directManagerInput.setValue(draftData.directManager);
-  }
+  modal.addComponents(
+    firstActionRow,
+    secondActionRow,
+    thirdActionRow
+  );
 
-  const firstActionRow = new ActionRowBuilder().addComponents(leaveTimeInput);
-  const secondActionRow = new ActionRowBuilder().addComponents(reasonInput);
-  const thirdActionRow = new ActionRowBuilder().addComponents(directManagerInput);
+  await interaction.showModal(modal);
+}
 
-  modal2.addComponents(firstActionRow, secondActionRow, thirdActionRow);
-
-  await interaction.showModal(modal2);
+async function handleRetryFormPart2(interaction) {
+  // This handler is no longer needed since we combined everything into one modal
+  return await interaction.reply({
+    content: '❌ Chức năng này đã được cập nhật. Vui lòng sử dụng lệnh `/form` để bắt đầu lại.',
+    flags: MessageFlags.Ephemeral
+  });
 }

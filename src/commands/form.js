@@ -28,24 +28,6 @@ module.exports = {
         .setCustomId('leave_request_form')
         .setTitle('📝 Form Xin Nghỉ Phép');
 
-      // Email input
-      const emailInput = new TextInputBuilder()
-        .setCustomId('email')
-        .setLabel('Email công ty')
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder('vd: nguyen.van.a@company.com')
-        .setRequired(true)
-        .setMaxLength(100);
-
-      // Employee ID input
-      const employeeIdInput = new TextInputBuilder()
-        .setCustomId('employee_id')
-        .setLabel('Mã nhân viên')
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder('vd: NV001')
-        .setRequired(true)
-        .setMaxLength(20);
-
       // Full name input
       const fullNameInput = new TextInputBuilder()
         .setCustomId('full_name')
@@ -55,38 +37,34 @@ module.exports = {
         .setRequired(true)
         .setMaxLength(100);
 
-      // Department input (will be validated against config)
-      const departmentInput = new TextInputBuilder()
-        .setCustomId('department')
-        .setLabel('Phòng ban/Công ty')
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder(`Chọn: ${config.departments.join(', ')}`)
-        .setRequired(true)
-        .setMaxLength(50);
-
-      // Leave date input
+      // Leave date and time combined input
       const leaveDateInput = new TextInputBuilder()
         .setCustomId('leave_date')
-        .setLabel('Ngày nghỉ (Ngày/Tháng/Năm)')
+        .setLabel('Ngày nghỉ và thời gian')
         .setStyle(TextInputStyle.Short)
-        .setPlaceholder('vd: Điền chính xác ngày nghỉ')
+        .setPlaceholder('VD: 15/01/2026 hoặc 15/01/2026 - 17/01/2026')
         .setRequired(true)
-        .setMaxLength(10);
+        .setMaxLength(100);
+
+      // Reason input
+      const reasonInput = new TextInputBuilder()
+        .setCustomId('reason')
+        .setLabel('Lý do nghỉ')
+        .setStyle(TextInputStyle.Paragraph)
+        .setPlaceholder('Mô tả lý do xin nghỉ phép...')
+        .setRequired(true)
+        .setMaxLength(500);
 
       // Create action rows for modal inputs
-      const firstActionRow = new ActionRowBuilder().addComponents(emailInput);
-      const secondActionRow = new ActionRowBuilder().addComponents(employeeIdInput);
-      const thirdActionRow = new ActionRowBuilder().addComponents(fullNameInput);
-      const fourthActionRow = new ActionRowBuilder().addComponents(departmentInput);
-      const fifthActionRow = new ActionRowBuilder().addComponents(leaveDateInput);
+      const firstActionRow = new ActionRowBuilder().addComponents(fullNameInput);
+      const secondActionRow = new ActionRowBuilder().addComponents(leaveDateInput);
+      const thirdActionRow = new ActionRowBuilder().addComponents(reasonInput);
 
       // Add action rows to modal
       modal.addComponents(
         firstActionRow,
         secondActionRow,
-        thirdActionRow,
-        fourthActionRow,
-        fifthActionRow
+        thirdActionRow
       );
 
       // Show modal to user
@@ -94,7 +72,7 @@ module.exports = {
 
     } catch (error) {
       console.error('Error in form command:', error);
-      
+
       if (!interaction.replied && !interaction.deferred) {
         await interaction.reply({
           content: '❌ Có lỗi xảy ra khi mở form. Vui lòng thử lại sau.',
