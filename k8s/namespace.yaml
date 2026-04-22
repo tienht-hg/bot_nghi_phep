@@ -1,0 +1,6 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: bot-nghi-phep
+  labels:
+    app: bot-nghi-phep

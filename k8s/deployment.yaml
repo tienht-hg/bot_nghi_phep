@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bot-nghi-phep
+  namespace: bot-nghi-phep
+  labels:
+    app: bot-nghi-phep
+spec:
+  replicas: 1  # Discord bot chỉ cần 1 instance
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: bot-nghi-phep
+  template:
+    metadata:
+      labels:
+        app: bot-nghi-phep
+    spec:
+      imagePullSecrets:
+        - name: harbor-cred
+      containers:
+        - name: bot-nghi-phep
+          image: harbor.hgmedia.dev/bot-nghi-phep/bot-nghi-phep:latest
+          imagePullPolicy: Always
+          envFrom:
+            - secretRef:
+                name: bot-nghi-phep-secret
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          volumeMounts:
+            - name: bot-data
+              mountPath: /app/data
+          livenessProbe:
+            exec:
+              command:
+                - node
+                - -e
+                - "process.exit(0)"
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - node
+                - -e
+                - "process.exit(0)"
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+      volumes:
+        - name: bot-data
+          persistentVolumeClaim:
+            claimName: bot-nghi-phep-data
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: bot-nghi-phep-data
+  namespace: bot-nghi-phep
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Mi
