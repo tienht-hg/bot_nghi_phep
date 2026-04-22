@@ -95,7 +95,7 @@ spec:
 
   environment {
     GIT_BRANCH = "${params.GIT_BRANCH}"
-    GIT_URL = 'https://github.com/hatienhg2310/bot_nghi_phep.git'
+    GIT_URL = 'https://github.com/tienht-hg/bot_nghi_phep.git'
 
     IMAGE_NAMESPACE = 'bot-nghi-phep'
     IMAGE_NAME = 'bot-nghi-phep'
